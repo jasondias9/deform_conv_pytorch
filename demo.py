@@ -37,7 +37,7 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
 parser.add_argument('--mod_mnist', action='store_true', default=True,
                     help='Use the modified MNIST dataset')
 parser.add_argument('--plainnet', action='store_true', default=False,
-                    help='Use DeformNet')
+                    help='Use PlainNet')
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.mod_mnist = True

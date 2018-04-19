@@ -5,6 +5,7 @@ import numpy as np
 from torch.utils.data import Dataset
 import torch
 
+
 class ModMNISTDataset(Dataset):
     
     training_file = 'training.pt'
