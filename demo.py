@@ -7,6 +7,12 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.autograd import Variable
 from deform_conv import DeformConv2D
+from torch.utils.data import DataLoader
+import os
+import pandas as pd
+import numpy as np
+from PIL import Image
+from modified_mnist_dataset import ModMNISTDataset
 
 from time import time
 
@@ -28,15 +34,43 @@ parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
+parser.add_argument('--mod_mnist', action='store_true', default=True,
+                    help='Use the modified MNIST dataset')
+parser.add_argument('--plainnet', action='store_true', default=False,
+                    help='Use DeformNet')
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
+args.mod_mnist = True
+args.derformed = True
+
+MODEL_DIR = './ModMNIST/'
 
 torch.manual_seed(args.seed)
 if args.cuda:
     torch.cuda.manual_seed(args.seed)
 
 kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
-train_loader = torch.utils.data.DataLoader(
+
+if args.mod_mnist:
+    train_loader = DataLoader(
+        ModMNISTDataset(MODEL_DIR, train=True,
+                       transform=transforms.Compose([
+                           transforms.Resize((28, 28)),
+                           transforms.ToTensor(),
+                           transforms.Normalize((0.1307,), (0.3081,))
+                       ])),
+        batch_size=args.batch_size, shuffle=True, **kwargs)
+
+    test_loader = DataLoader(
+        ModMNISTDataset(MODEL_DIR, train=False,
+                       transform=transforms.Compose([
+                           transforms.Resize((28, 28)),
+                           transforms.ToTensor(),
+                           transforms.Normalize((0.1307,), (0.3081,))
+                       ])),
+        batch_size=args.test_batch_size, shuffle=True, **kwargs)
+else:
+    train_loader = torch.utils.data.DataLoader(
     datasets.MNIST('./MNIST', train=True, download=True,
                    transform=transforms.Compose([
                        transforms.ToTensor(),
@@ -88,7 +122,6 @@ class DeformNet(nn.Module):
 
         return F.log_softmax(x, dim=1)
 
-
 class PlainNet(nn.Module):
     def __init__(self):
         super(PlainNet, self).__init__()
@@ -122,9 +155,6 @@ class PlainNet(nn.Module):
 
         return F.log_softmax(x, dim=1)
 
-model = DeformNet()
-
-
 def init_weights(m):
     if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
         nn.init.xavier_uniform(m.weight, gain=nn.init.calculate_gain('relu'))
@@ -138,14 +168,18 @@ def init_conv_offset(m):
         m.bias.data = torch.FloatTensor(m.bias.shape[0]).zero_()
 
 
+if not args.plainnet:
+    model = DeformNet()
+    model.offsets.apply(init_conv_offset)
+else:
+    model = PlainNet()
+
 model.apply(init_weights)
-model.offsets.apply(init_conv_offset)
 
 if args.cuda:
     model.cuda()
 
 optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
 
 def train(epoch):
     model.train()
@@ -155,7 +189,7 @@ def train(epoch):
             data, target = data.cuda(), target.cuda()
         optimizer.zero_grad()
         output = model(data)
-        loss = F.nll_loss(output, target)
+        loss = F.nll_loss(output, target.squeeze().type(torch.cuda.LongTensor))
         loss.backward()
         optimizer.step()
         if batch_idx % args.log_interval == 0:
@@ -172,9 +206,9 @@ def test():
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data, volatile=True), Variable(target)
         output = model(data)
-        test_loss += F.nll_loss(output, target, size_average=False).data[0] # sum up batch loss
+        test_loss += F.nll_loss(output, target.squeeze().type(torch.cuda.LongTensor), size_average=False).data[0] # sum up batch loss
         pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
-        correct += pred.eq(target.data.view_as(pred)).cpu().sum()
+        correct += pred.eq(target.type(torch.cuda.LongTensor).data.view_as(pred)).cpu().sum()
 
     test_loss /= len(test_loader.dataset)
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
@@ -182,6 +216,7 @@ def test():
         100. * correct / len(test_loader.dataset)))
 
 
+#start training
 for epoch in range(1, args.epochs + 1):
     since = time()
     train(epoch)
